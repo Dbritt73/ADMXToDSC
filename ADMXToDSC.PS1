@@ -1,6 +1,191 @@
 #requires -version 4.0
 #requires -Module GroupPolicy
 
+function Recurse_PolicyKeys {
+
+    [cmdletbinding()]
+    param (
+
+        [string]$key,
+
+        [string]$gpoName
+
+    )
+
+    Begin {
+
+        Write-Verbose "Starting: $($MyInvocation.Mycommand)"
+
+    }
+
+    Process {
+
+        # This function goes through the registry.pol data and finds entries associated with the
+        # two policy hives mentioned above. Consider rename of the function to be more modular and
+        # powershell'ish
+        Write-Verbose "Getting GPRegistry value $key from $gponame"
+        $current = Get-GPRegistryValue -Name $gpo -Key $key  -ErrorAction SilentlyContinue
+        if ($current -eq $null) {
+
+            #means we didn't get a reference to the key being called
+            #probably beause there's no pol settings under it
+            return
+
+        }
+
+        $returnVal = New-Object -TypeName System.Collections.ArrayList
+
+        foreach ($item in $current) {
+
+            if ($item.ValueName -ne $null) {
+
+                $returnVal.Add($item)
+
+            } else {
+
+                #this handles the case where we're on a container (i.e. keypath) that doesn't have a value
+                Recurse_PolicyKeys -Key $item.FullKeyPath -gpoName $gpo
+
+            }
+
+        }
+
+        Write-Output -InputObject $returnVal
+
+    }
+
+    End {}
+
+}
+
+
+function New-DSCDoc {
+
+    [cmdletbinding()]
+    param (
+
+        [string] $path,
+
+        [string] $gpo,
+
+        [array] $policies
+
+    )
+
+    Begin {
+
+        # consider rename of function - New-DSCDoc
+        # add verbose output, error handling and debugging
+
+        Write-Verbose "Starting: $($MyInvocation.Mycommand)"
+
+        #parse the spaces out of the GPO name, since we use it for the Configuration name
+        $gpo = $gpo -replace " ","_"
+        $outputFile = "$path\$gpo.ps1"
+        $Splat = @{
+
+            'FilePath' = $outputFile
+            'Encoding' = 'Unicode'
+
+        }
+
+    }
+
+    Process {
+
+        Write-Verbose "Saving config to $outputFile"
+        $String = "Configuration `"$gpo`""
+        $String | out-file @splat
+
+        #add append = $true key to splat hash for remaining out-file calls
+        $splat.Add('Append', $true)
+
+        $String = '{'
+        $String | out-file @splat
+
+        $String = "   Import-DscResource -ModuleName PSDesiredStateConfiguration"
+        $String | out-file @splat
+
+        $String = 'Node localhost'
+        $String | out-file @splat
+
+        $String = '  {'
+        $String | out-file @splat
+
+        foreach ($regItem in $policies) {
+
+            if ($regItem.FullKeyPath -eq $null) {
+
+                #throw away any blank entries
+                continue
+
+            }
+
+            #this next bit guarantees a unique DSC resource name by adding each registry resource name to a hashtable.
+            #If found, we increment the key index and append to resource name
+            $resourceName = ""
+            if ($script:valueNameHashTable.ContainsKey($regItem.ValueName)) {
+
+                $script:valueNameHashTable[$regItem.ValueName] = $script:valueNameHashTable[$regItem.ValueName]+1
+                $resourceName = $regItem.ValueName+$script:valueNameHashTable[$regItem.ValueName]
+
+            } else {
+
+                $script:valueNameHashTable.Add($regItem.ValueName,0)
+                $resourceName = $regItem.ValueName
+
+            }
+
+            # now build the resources
+            # exploring other ways to create the resource info.
+            # added unicode encoding to valuename and data to support that type for certain policies
+            #(e.g. SRP/Applocker)
+
+            $String = "    Registry '" + $resourceName + "'"
+            $String | out-file @splat
+
+            $String = '    {'
+            $String | out-file @splat
+
+            $String = "      Ensure = 'Present'"
+            $String | out-file @splat
+
+            $String = "      Key = '"+ $regItem.FullKeyPath + "'"
+            $String | out-file @splat
+
+            $String = "      ValueName = '" + $regItem.ValueName + "'"
+            $String | out-file @splat
+
+            $String = "      ValueType = '" +$regItem.Type + "'"
+            $String | out-file @splat
+
+            # need to trim any null characters from ValueData (mostly an Applocker issue)
+            $trimValue = $regItem.Value.ToString().Trim("`0")
+
+            $String = "      ValueData = '" +$trimValue + "'"
+            $String | out-file @splat
+
+            $String = '    }'
+            $String | out-file @splat
+
+        }
+
+        $String = '  }'
+        $String | out-file @splat
+
+        $String = '}'
+        $String | out-file @splat
+
+        $String = $gpo
+        $String | out-file @splat
+
+    }
+
+    End {}
+
+}
+
+
 function ADMtoDSC {
     [cmdletbinding()]
     param (
@@ -20,134 +205,8 @@ function ADMtoDSC {
     $policies += Recurse_PolicyKeys -key "HKLM\Software\Microsoft\Windows NT\CurrentVersion" -gpo $gpo
 
     # build the DSC configuration doc
-    GenConfigDoc -path $path -gpo $gpo -policies $policies
+    New-DSCDoc -path $path -gpo $gpo -policies $policies
     # add error/debug and verbose.
-
-}
-
-
-function Recurse_PolicyKeys {
-
-    [cmdletbinding()]
-    param (
-
-        [string]$key,
-
-        [string]$gpoName
-
-    )
-
-    # This function goes through the registry.pol data and finds entries associated with the
-    # two policy hives mentioned above. Consider rename of the function to be more modular and
-    # powershell'ish
-
-    Write-Verbose "Starting: $($MyInvocation.Mycommand)"
-    # Get-GPRegistryValue is from the GroupPolicy PowerShell module.
-    Write-Verbose "Getting GPRegistry value $key from $gponame"
-
-    $current = Get-GPRegistryValue -Name $gpo -Key $key  -ErrorAction SilentlyContinue
-    if ($current -eq $null) {
-
-        #means we didn't get a reference to the key being called
-        #probably beause there's no pol settings under it
-        return
-
-    }
-
-    foreach ($item in $current) {
-
-        if ($item.ValueName -ne $null) {
-
-            [array]$returnVal += $item
-
-        } else {
-
-            #this handles the case where we're on a container (i.e. keypath) that doesn't have a value
-            Recurse_PolicyKeys -Key $item.FullKeyPath -gpoName $gpo
-
-        }
-
-    }
-
-    Write-Output -InputObject $returnVal
-
-}
-
-
-function GenConfigDoc {
-
-    [cmdletbinding()]
-    param (
-
-        [string] $path,
-
-        [string] $gpo,
-
-        [array] $policies
-
-    )
-
-    # consider rename of function - New-DSCDoc
-    # add verbose output, error handling and debugging
-
-    Write-Verbose "Starting: $($MyInvocation.Mycommand)"
-
-    #parse the spaces out of the GPO name, since we use it for the Configuration name
-    $gpo = $gpo -replace " ","_"
-    $outputFile = "$path\$gpo.ps1"
-
-    Write-Verbose "Saving config to $outputFile"
-    "Configuration `"$gpo`"" | out-file -FilePath $outputFile -Encoding unicode
-    '{' | out-file -FilePath $outputFile -Append -Encoding unicode
-    "   Import-DscResource -ModuleName PSDesiredStateConfiguration" | out-file -Append -FilePath $outputFile -Encoding unicode
-    'Node localhost' | out-file -FilePath $outputFile -Append -Encoding unicode
-    '  {' | out-file -FilePath $outputFile -Append -Encoding unicode
-
-    foreach ($regItem in $policies) {
-
-        if ($regItem.FullKeyPath -eq $null) {
-
-            #throw away any blank entries
-            continue
-
-        }
-
-        #this next bit guarantees a unique DSC resource name by adding each registry resource name to a hashtable.
-        #If found, we increment the key index and append to resource name
-        $resourceName = ""
-        if ($script:valueNameHashTable.ContainsKey($regItem.ValueName)) {
-
-            $script:valueNameHashTable[$regItem.ValueName] = $script:valueNameHashTable[$regItem.ValueName]+1
-            $resourceName = $regItem.ValueName+$script:valueNameHashTable[$regItem.ValueName]
-
-        } else {
-
-            $script:valueNameHashTable.Add($regItem.ValueName,0)
-            $resourceName = $regItem.ValueName
-
-        }
-
-        # now build the resources
-        # exploring other ways to create the resource info.
-        # added unicode encoding to valuename and data to support that type for certain policies
-        #(e.g. SRP/Applocker)
-        "    Registry '" + $resourceName + "'"| out-file -FilePath $outputFile -Append -Encoding unicode
-        '    {' | out-file -FilePath $outputFile -Append -Encoding unicode
-        "      Ensure = 'Present'" | out-file -FilePath $outputFile -Append -Encoding unicode
-        "      Key = '"+ $regItem.FullKeyPath + "'"| out-file -FilePath $outputFile -Append -Encoding unicode
-        "      ValueName = '" + $regItem.ValueName + "'" | out-file -FilePath $outputFile -Append -Encoding unicode
-        "      ValueType = '" +$regItem.Type + "'" | out-file -FilePath $outputFile -Append -Encoding unicode
-
-        # need to trim any nul characters from ValueData (mostly an Applocker issue)
-        $trimValue = $regItem.Value.ToString().Trim("`0")
-        "      ValueData = '" +$trimValue + "'"| out-file -FilePath $outputFile -Append -Encoding unicode
-        '    }' | out-file -FilePath $outputFile -Append -Encoding unicode
-
-    }
-
-    '  }' | out-file -FilePath $outputFile -Append -Encoding unicode
-    '}' | out-file -FilePath $outputFile -Append -Encoding unicode
-    $gpo | out-file -FilePath $outputFile -Append -Encoding unicode
 
 }
 
@@ -211,7 +270,7 @@ function ConvertTo-ADMXtoDSC {
         [string]$pb = ($PSBoundParameters | Format-Table -AutoSize | Out-String).TrimEnd()
         Write-Verbose "PSBoundparameters: `n$($pb.split("`n").Foreach({"$("`t"*4)$_"}) | Out-String) `n"
 
-    } #begin
+    }
 
     Process {
 
@@ -228,6 +287,6 @@ function ConvertTo-ADMXtoDSC {
 
         Write-Verbose "Ending: $($MyInvocation.Mycommand)"
 
-    } #end
+    }
 
 }
