@@ -69,7 +69,7 @@ function Recurse_PolicyKeys {
 
     }
 
-    return $returnVal
+    Write-Output -InputObject $returnVal
 
 }
 
@@ -91,6 +91,7 @@ function GenConfigDoc {
     # add verbose output, error handling and debugging
 
     Write-Verbose "Starting: $($MyInvocation.Mycommand)"
+
     #parse the spaces out of the GPO name, since we use it for the Configuration name
     $gpo = $gpo -replace " ","_"
     $outputFile = "$path\$gpo.ps1"
