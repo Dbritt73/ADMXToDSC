@@ -25,7 +25,7 @@ function Recurse_PolicyKeys {
         # powershell'ish
         Write-Verbose "Getting GPRegistry value $key from $gponame"
         $current = Get-GPRegistryValue -Name $gpo -Key $key  -ErrorAction SilentlyContinue
-        if ($current -eq $null) {
+        if ($null -eq $current) {
 
             #means we didn't get a reference to the key being called
             #probably beause there's no pol settings under it
@@ -37,7 +37,7 @@ function Recurse_PolicyKeys {
 
         foreach ($item in $current) {
 
-            if ($item.ValueName -ne $null) {
+            if ($null -ne $item.ValueName) {
 
                 $returnVal.Add($item)
 
@@ -114,7 +114,7 @@ function New-DSCDoc {
 
         foreach ($regItem in $policies) {
 
-            if ($regItem.FullKeyPath -eq $null) {
+            if ($null -eq $regItem.FullKeyPath) {
 
                 #throw away any blank entries
                 continue
